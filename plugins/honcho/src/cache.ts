@@ -375,6 +375,51 @@ export async function addMessagesBatched(
 }
 
 // ============================================
+// Injected Conclusions - per Claude session, for injection.dedupePerSession
+// ============================================
+
+const INJECTED_FILE = join(CACHE_DIR, "injected-conclusions.json");
+// Sessions idle longer than this are pruned on the next write.
+const INJECTED_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000;
+
+type InjectedCache = Record<string, { keys: string[]; updatedAt: number }>;
+
+function loadInjectedCache(): InjectedCache {
+  ensureCacheDir();
+  if (!existsSync(INJECTED_FILE)) return {};
+  try {
+    return JSON.parse(readFileSync(INJECTED_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Keys of the conclusions already injected into this Claude session. */
+export function getInjectedConclusionKeys(sessionId: string): Set<string> {
+  return new Set(loadInjectedCache()[sessionId]?.keys ?? []);
+}
+
+/** Record conclusions as injected into this Claude session. */
+export function addInjectedConclusionKeys(sessionId: string, keys: string[]): void {
+  const cache = loadInjectedCache();
+  const now = Date.now();
+  for (const [id, entry] of Object.entries(cache)) {
+    if (now - entry.updatedAt > INJECTED_MAX_AGE_MS) delete cache[id];
+  }
+  const existing = cache[sessionId]?.keys ?? [];
+  cache[sessionId] = { keys: [...new Set([...existing, ...keys])], updatedAt: now };
+  writeFileSync(INJECTED_FILE, JSON.stringify(cache));
+}
+
+/** Forget what was injected into this Claude session (its context is being reset). */
+export function clearInjectedConclusionKeys(sessionId: string): void {
+  const cache = loadInjectedCache();
+  if (!(sessionId in cache)) return;
+  delete cache[sessionId];
+  writeFileSync(INJECTED_FILE, JSON.stringify(cache));
+}
+
+// ============================================
 // Utility: Clear all caches (for debugging)
 // ============================================
 
@@ -383,6 +428,7 @@ export function clearAllCaches(): void {
   if (existsSync(ID_CACHE_FILE)) writeFileSync(ID_CACHE_FILE, "{}");
   if (existsSync(CONTEXT_CACHE_FILE)) writeFileSync(CONTEXT_CACHE_FILE, "{}");
   if (existsSync(GIT_STATE_FILE)) writeFileSync(GIT_STATE_FILE, "{}");
+  if (existsSync(INJECTED_FILE)) writeFileSync(INJECTED_FILE, "{}");
 }
 
 /** Clear only the ID cache (workspace, peer, session IDs) */

@@ -113,6 +113,13 @@ export interface InjectionConfig {
    *  Kept separate from the top-level `reasoningLevel` so per-turn dialectic can
    *  stay cheap on the hot path without lowering the tier used elsewhere. */
   dialecticReasoning?: ReasoningLevel;
+  /** Inject each user/assistant conclusion at most once per Claude session;
+   *  conclusions already in the conversation are skipped. Reset on compaction,
+   *  when the earlier injections leave the context (default: false). */
+  dedupePerSession?: boolean;
+  /** Truncate each injected conclusion to this many characters; 0 disables
+   *  the cap (default: 0). */
+  maxConclusionChars?: number;
 }
 
 /** Resolved injection defaults: memory-usage directives + session summary +
@@ -131,6 +138,8 @@ export const DEFAULT_INJECTION: Required<InjectionConfig> = {
   dialecticTemplate:
     "Return a compact, factual list of anything from the user's history — preferences, prior decisions, relevant past work — that would help with the following. Write in the third person as background notes; do not address the user, ask questions, or offer next steps. If nothing relevant exists, say so in one line. Relevant to: %{user_query}",
   dialecticReasoning: "medium",
+  dedupePerSession: false,
+  maxConclusionChars: 0,
 };
 
 export const REASONING_LEVELS = ["minimal", "low", "medium", "high", "max"] as const;

@@ -2,6 +2,7 @@ import { Honcho } from "@honcho-ai/sdk";
 import { initHook, loadConfig, getSessionForPath, getSessionName, getHonchoClientOptions, isPluginEnabled, getCachedStdin, readStdinText, getObservationMode } from "../config.js";
 import { Spinner } from "../spinner.js";
 import { setMemoryState } from "../state.js";
+import { clearInjectedConclusionKeys } from "../cache.js";
 import { logHook, logApiCall, setLogContext } from "../log.js";
 import { verboseApiResult, verboseList, visAnchorSummary } from "../visual.js";
 
@@ -145,6 +146,9 @@ export async function handlePreCompact(): Promise<void> {
     spinner.start("anchoring memory before compaction");
   }
   setMemoryState("compacting", undefined, hookInput.session_id);
+  // Compaction drops the earlier per-turn injections from the conversation, so
+  // dedupePerSession must be free to inject those conclusions again.
+  if (hookInput.session_id) clearInjectedConclusionKeys(hookInput.session_id);
 
   try {
     const honcho = new Honcho(getHonchoClientOptions(config));

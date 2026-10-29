@@ -6,6 +6,8 @@ import {
   getMessageCount,
   incrementMessageCount,
   getInstanceIdForCwd,
+  getInjectedConclusionKeys,
+  addInjectedConclusionKeys,
 } from "../cache.js";
 import { logHook, logApiCall, setLogContext } from "../log.js";
 import { visInjectionMessage, visDialecticMessage, visSessionContextMessage, visSkipMessage, visEmptyComponent, addSystemMessage, verboseApiResult, verboseList } from "../visual.js";
@@ -215,8 +217,46 @@ export async function handleUserPrompt(): Promise<void> {
       ? { context: userCtxResult.context, matched: userCtxResult.matched, queryLabel: userCtxResult.queryLabel }
       : null;
 
-  emitPerTurn(config, injection, userCtx, assistantCtxResult?.context ?? null, sessionCtx, dialectic, banner);
+  emitPerTurn(config, injection, userCtx, assistantCtxResult?.context ?? null, sessionCtx, dialectic, banner, hookInput.session_id);
   process.exit(0);
+}
+
+/** Dedupe key for a conclusion: case- and whitespace-insensitive. */
+function conclusionKey(conclusion: string): string {
+  return Bun.hash(conclusion.toLowerCase().replace(/\s+/g, " ").trim()).toString(36);
+}
+
+/**
+ * Applies `maxConclusionChars` and, with `dedupePerSession`, drops conclusions
+ * already injected into this Claude session. `fresh` is what should be injected
+ * now; `skipped` counts the ones left out as already in context.
+ */
+function createConclusionFilter(injection: InjectionConfig, sessionId?: string) {
+  const sent = injection.dedupePerSession && sessionId ? getInjectedConclusionKeys(sessionId) : null;
+  const added: string[] = [];
+  const cap = injection.maxConclusionChars ?? 0;
+  return {
+    apply(conclusions: string[]): { fresh: string[]; skipped: number } {
+      const fresh: string[] = [];
+      let skipped = 0;
+      for (const conclusion of conclusions) {
+        if (sent) {
+          const key = conclusionKey(conclusion);
+          if (sent.has(key)) {
+            skipped++;
+            continue;
+          }
+          sent.add(key);
+          added.push(key);
+        }
+        fresh.push(cap > 0 && conclusion.length > cap ? `${conclusion.slice(0, cap - 1).trimEnd()}…` : conclusion);
+      }
+      return { fresh, skipped };
+    },
+    commit(): void {
+      if (sessionId && added.length > 0) addInjectedConclusionKeys(sessionId, added);
+    },
+  };
 }
 
 /**
@@ -235,6 +275,7 @@ function emitPerTurn(
   sessionCtx: SessionContextResult | null,
   dialectic: DialecticResult | null,
   banner?: string,
+  sessionId?: string,
 ): void {
   const parts: string[] = [];
   const visLines: string[] = [];
@@ -242,13 +283,14 @@ function emitPerTurn(
   const want = (c: PerTurnComponent) => injection.perTurn?.includes(c) ?? false;
   const unavailable = (what: string) => visLines.push(visEmptyComponent("user-prompt", `${what} unavailable`, true));
   const empty = (message: string) => visLines.push(visEmptyComponent("user-prompt", message));
+  const filter = createConclusionFilter(injection, sessionId);
 
   if (want("userContext")) {
-    const conclusions = userCtx ? extractConclusions(userCtx.context) : [];
+    const { fresh: conclusions, skipped } = filter.apply(userCtx ? extractConclusions(userCtx.context) : []);
     if (!userCtx) {
       unavailable("user context");
     } else if (conclusions.length === 0) {
-      empty("no conclusions matched");
+      empty(skipped > 0 ? `no new conclusions (${skipped} already in context)` : "no conclusions matched");
     } else {
       parts.push(`Relevant conclusions: ${conclusions.join("; ")}`);
       visLines.push(visInjectionMessage("user-prompt", { conclusions, matched: userCtx.matched, queryLabel: userCtx.queryLabel, showContents: show("userContext") }));
@@ -256,11 +298,13 @@ function emitPerTurn(
   }
 
   if (want("assistantContext")) {
-    const conclusions = assistantCtx ? extractConclusions(assistantCtx) : [];
+    const { fresh: conclusions, skipped } = filter.apply(assistantCtx ? extractConclusions(assistantCtx) : []);
     if (!assistantCtx) {
       unavailable("assistant context");
     } else if (conclusions.length === 0) {
-      empty(`no conclusions about ${config.aiPeer} matched`);
+      empty(skipped > 0
+        ? `no new conclusions about ${config.aiPeer} (${skipped} already in context)`
+        : `no conclusions about ${config.aiPeer} matched`);
     } else {
       parts.push(`Conclusions about the assistant (${config.aiPeer}): ${conclusions.join("; ")}`);
       visLines.push(visInjectionMessage("user-prompt", { conclusions, queryLabel: `assistant ${config.aiPeer}`, showContents: show("assistantContext") }));
@@ -288,6 +332,8 @@ function emitPerTurn(
       visLines.push(visDialecticMessage("user-prompt", dialectic.reasoning, dialectic.elapsedMs, dialectic.answer, show("dialectic")));
     }
   }
+
+  filter.commit();
 
   const visMsg = visLines.join("\n");
   const systemMessage = banner ? `${banner}\n${visMsg}` : visMsg;

@@ -570,6 +570,26 @@ function handleSetConfig(args: Record<string, unknown>) {
       cfg.injection.searchMaxDistance = Number(value);
       break;
 
+    case "injection.dedupePerSession":
+      previousValue = cfg.injection?.dedupePerSession;
+      if (!cfg.injection) cfg.injection = {};
+      cfg.injection.dedupePerSession = coerceBoolean(value);
+      break;
+
+    case "injection.maxConclusionChars": {
+      const chars = Number(value);
+      if (!Number.isFinite(chars) || chars < 0) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ success: false, error: "injection.maxConclusionChars must be 0 or a positive number" }, null, 2) }],
+          isError: true,
+        };
+      }
+      previousValue = cfg.injection?.maxConclusionChars;
+      if (!cfg.injection) cfg.injection = {};
+      cfg.injection.maxConclusionChars = chars;
+      break;
+    }
+
     case "injection.sessionContextTokens": {
       const tokens = Number(value);
       if (!Number.isFinite(tokens) || tokens <= 0) {
@@ -1009,6 +1029,8 @@ export async function runMcpServer(): Promise<void> {
                   "injection.searchTopK",
                   "injection.maxConclusions",
                   "injection.searchMaxDistance",
+                  "injection.dedupePerSession",
+                  "injection.maxConclusionChars",
                   "injection.searchQuerySource",
                   "injection.sessionContextTokens",
                   "injection.dialecticTemplate",
